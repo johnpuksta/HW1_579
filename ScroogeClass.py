@@ -37,7 +37,7 @@ class ScroogeCoin(object):
         # We must make sure that the Dictionary is Ordered, or we'll have inconsistent hashes
         # use json.dumps().encode() and specify the corrent parameters
         # use hashlib to hash the output of json.dumps()
-        dump = json.dumps(blob).encode('utf-8')
+        dump = json.dumps(blob, sort_keys=True).encode('utf-8')
         return hashlib.sha256(dump).hexdigest()
 
     def sign(self, hash_):
@@ -64,18 +64,6 @@ class ScroogeCoin(object):
 
         return funded_transactions
 
-    def validate_funds(self, tx):
-        total_val = 0
-        rec_val = 0
-
-        for location in tx["locations"]:
-            total_val += location["amount"]
-
-        for receivers in tx["receivers"].items():
-            rec_val += receivers[1]
-
-        return True if total_val >= rec_val else False
-
     def validate_spent(self, tx):
         sumRec = 0
 
@@ -85,6 +73,23 @@ class ScroogeCoin(object):
         acct_total = self.show_user_balance(tx["sender"])
 
         return True if acct_total == sumRec else False
+
+    def validate_funds(self, tx):
+        total_val = 0
+        rec_val = 0
+        sent_from_address = 0
+        for block in self.chain:
+            if tx["sender"] == block["transactions"][0]["sender"]:
+                for addresses in block["transactions"][0]["receivers"].items():
+                    if addresses[0] in tx["receivers"]:
+                        sent_from_address += addresses[1]
+        for location in tx["locations"]:
+            total_val += location["amount"]
+
+        for receivers in tx["receivers"].items():
+            rec_val += receivers[1]
+
+        return True if total_val - sent_from_address >= rec_val else False
 
     def validate_consumed(self, tx, public_key):
         if (len(self.current_transactions) == 0):
@@ -97,6 +102,14 @@ class ScroogeCoin(object):
             if (address == transaction["sender"]):
                 return True
         return False
+
+    def validate_hash(self, tx):
+        dummyHash = {
+            "sender": tx["sender"],
+            "locations": tx["locations"],
+            "receivers": tx["receivers"]
+        }
+        return True if tx["hash"] == self.hash(dummyHash) else False
 
     def validate_tx(self, tx, public_key):
         """
@@ -114,18 +127,17 @@ class ScroogeCoin(object):
 
         :return: if tx is valid return tx
         """
-        # Checks if there is a signature on tx
-        is_signed = True if any(
-            tx["signature"]) else False
-        if (is_signed == False):
-            print("Incorrect Signature")
-            return -1
-
-        # Checks that the hash on the trans matches the signature, which verifies signature
-        is_correct_hash = ecdsa.verify(
-            tx["signature"], tx["hash"], public_key, curve.secp256k1)
+        # Checks that the hash
+        is_correct_hash = self.validate_hash(tx)
         if (is_correct_hash == False):
             print("Transaction has incorrect Hash")
+            return -1
+
+        # Checks if signature is correct
+        is_signed = ecdsa.verify(
+            tx["signature"], tx["hash"], public_key, curve.secp256k1)
+        if (is_signed == False):
+            print("Incorrect Signature")
             return -1
 
         # Checks if user has enough funds to send transaction
@@ -164,26 +176,26 @@ class ScroogeCoin(object):
 
         return block
         """
-        transactions = self.current_transactions[0]
-        tranRet = []
-        tranRet.append(transactions)
-
-        if (len(transactions) == 0):
+        if (len(self.current_transactions) == 0):
             return 0
 
-        block = {
-            # previous_hash,
-            'previous_hash': self.chain[-1:][0]["hash"] if any(self.chain) else "NA",
-            'index': len(self.chain),  # index,
-            'transactions': tranRet,  # transactions,
-        }
-        # hash and sign the block
-        block["hash"] = self.hash(block)  # hash of block
-        block["signature"] = self.sign(
-            block["hash"])  # signed hash of block
-        self.chain.append(block)
+        for transaction in self.current_transactions:
+            currTran = []
+            currTran.append(transaction)
+
+            block = {
+                # previous_hash,
+                'previous_hash': self.chain[-1:][0]["hash"] if any(self.chain) else "NA",
+                'index': len(self.chain),  # index,
+                'transactions': currTran,  # transactions,
+            }
+            # hash and sign the block
+            block["hash"] = self.hash(block)  # hash of block
+            block["signature"] = self.sign(
+                block["hash"])  # signed hash of block
+            self.chain.append(block)
         self.current_transactions = []
-        return block
+        return self.chain
 
     def add_tx(self, tx, public_key):
         """
@@ -202,7 +214,7 @@ class ScroogeCoin(object):
 
         :return: True if the tx is added to current_transactions
         """
-        if (ScroogeCoin.validate_tx(self, tx, public_key) == tx):
+        if (self.validate_tx(tx, public_key) == tx):
             self.current_transactions.append(tx)
             return True
         return False
@@ -261,7 +273,7 @@ class User(object):
         # We must make sure that the Dictionary is Ordered, or we'll have inconsistent hashes
         # use json.dumps().encode() and specify the corrent parameters
         # use hashlib to hash the output of json.dumps()
-        dump = json.dumps(blob).encode('utf-8')
+        dump = json.dumps(blob, sort_keys=True).encode('utf-8')
         return hashlib.sha256(dump).hexdigest()
 
     def sign(self, hash_):
